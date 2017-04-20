@@ -1,0 +1,15 @@
+---
+title: "Patient Matching"
+output: html_notebook
+---
+ 
+[ONC Patient Matching Document - 2014-02-07](http://journal.ahima.org/wp-content/uploads/ONC-Patient-Identification-Matching-Final-Report-February-2014.pdf)
+ 
+[Patient Matching Algorithms](http://clinfowiki.org/wiki/index.php/Patient_Matching_Algorithms#Advanced_Algorithms:)
+
+[Review of Issues with Patient Matching in 2016](http://www.modernhealthcare.com/article/20160123/MAGAZINE/301239980)
+
+
+
+
+[Patient ID Challenge - CHIME](https://herox.com/PatientIDChallenge)

@@ -1,0 +1,26 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+##Measure Definition
+Meas•ure n. A standard: a basis for comparison; a reference point against which other things can be evaluated; “they set the measure for all subsequent work.” v. To bring into comparison against a standard.
+
+###Process of Internal Measure Adoption
+1) Call for Nominations
+2) Call for Candidate Standards  
+3) Candidate Consensus Standard Review
+4) Public and Member Comment
+5) Member Voting
+6) CSAC Decision  
+7) Board Ratification
+8) Appeals
+
+##Measure Endorsement 
+__Important to measure__ and report to keep our focus on priority areas, where the evidence is highest that measurement can have a positive impact on healthcare quality.
+
+__Scientifically acceptable__, so that the measure when implemented will produce consistent (reliable) and credible (valid) results about the quality of care.
+
+__Useable and relevant__ to ensure that intended users — consumers, purchasers, providers, and policy makers — can understand the results of the measure and are likely to find them useful for quality improvement and decision making.
+
+__Feasible to collect__ with data that can be readily available for measurement and retrievable without undue burden.
