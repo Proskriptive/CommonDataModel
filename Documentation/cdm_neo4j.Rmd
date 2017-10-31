@@ -1,0 +1,437 @@
+---
+title: "Common Data Model - Neo4J Notebook"
+output: html_notebook
+---
+ 
+ 
+
+```{r setup,warning=FALSE,message=FALSE,echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE,echo = FALSE)
+library(data.table)
+library(RNeo4j)  
+#library(networkD3)
+library(highcharter)
+library(knitr)
+library(dplyr)
+library(readr)
+ clean_name <- function(x) {
+  tolower(gsub("( |/)","_",gsub(" - ","_",gsub("([A-Z])(-)([A-Z])","\\1_\\3" ,tolower(x)))))
+ }
+ 
+ clean_relationship_name <- function(x) {
+  toupper(gsub("( |/)","_",gsub(" - ","_",gsub("([A-Z])(-)([A-Z])","\\1_\\3" ,tolower(x)))))
+}
+source("../initiate_graph_db.R",local = TRUE)
+```
+
+#Data Ingestion Process
+
+There are 3 steps in the process.
+
+1) Ingest Raw Data
+2) Stage Data
+3) Create Trusted Data
+
+Each of these processes have various tasks associated with them which vary based on the data source.  
+
+###Ingest Raw Data
+Ingesting the data requires the transfer of data from on premise location to the cloud. Data is either streamed in near realtime, or through batch data transfers.  Multiple tools are possible to use for batch data transfers including SFTP, rsync, SSI, and the Microsoft Azure Data Factory.  Proskriptive utilizes the secure Azure Data Factory to perform batch data transfers. The data is transfered from the on premise location to the Proskritpive Data Lake which is located in a raw data storage are specific to the customer.
+
+###Stage Data
+Staging data requires processing the raw data and transforming it into a format that allows easy loading into the Trusted databases. Data is placed in CSV formats to allow loads by database tools.  The transformation of the data at this time is based on using tools in the R Server environment which are able to process the data rapidly since the data sets are relatively small.  Additional processes occur during this point including de-identification of the data.
+
+###Create Trusted Data
+Now that the data has been transformed into a standard format, the next step is to load the staged data into the databases.  Proskriptive utilizes several types of databases including graph database, and big data solutions Hadoop. Loading of the data into the Neo4j Graph Database utilizes an import process that is supported through the Cypher language.  The import commands bring in data in CSV formats, and is able to merge existing data into the database.
+
+
+
+##Staging
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+concepts_v5 <- read_delim("/data01/data_sources/OMOP/vocab_v5.1_extended/CONCEPT.csv",delim =  "\t" ,escape_double = FALSE,progress = FALSE)
+
+
+names(concepts_v5) <- clean_name(names(concepts_v5))
+
+write_csv(concepts_v5,"/data01/data_sources/OMOP/vocab_v5_stage/concept.csv",na = "")
+#write_csv(concepts_v5,path = "/var/lib/neo4j/import/OMPO_vocabulary/vocab_download_v5/concept_.csv",na = "")
+
+
+```
+
+
+
+```{bash, eval=FALSE, include=FALSE}
+  cp /data01/data_sources/OMOP/vocab_download_v5/concept_.csv  /var/lib/neo4j/import/OMPO_vocabulary/vocab_download_v5/
+```
+
+###Concept Properties
+Determine the fields that are not relationship based.
+
+```{r}
+
+concept_data <- concepts_v5%>%select(concept_id,concept_name,standard_concept,concept_code,valid_start_date,valid_end_date,invalid_reason)
+```
+
+```{r}
+str(concept_data)
+write_csv(concept_data,"/data01/data_sources/OMOP/vocab_v5_stage/concept_data.csv",na = "")
+```
+
+
+###Build Concept
+
+ 
+```{r}
+ concepts_v5%>%count(domain_id,sort = TRUE)
+```
+
+
+
+```{r}
+ concepts_v5%>%count(concept_class_id,sort = TRUE)
+```
+
+###Concepts
+Label::Concept:OMOP 
+ 
+
+###Concept Class
+
+__Label::__ Concept_Class
+
+__Properties::__
+
+Name|Type
+-|-
+concept_id|character
+concept_name | character
+CONCEPT_CLASS_CONCEPT_ID | int
+
+
+```{r}
+concept_class <- read_delim("/data01/data_sources/OMOP/vocab_v5.1_extended/CONCEPT_CLASS.csv",delim = "\t")
+(concept_class%>%arrange(CONCEPT_CLASS_ID))
+```
+
+###Concept Relationship Staging
+
+
+```{r, message=FALSE, warning=FALSE}
+concept_rel <- read_delim("/data01/data_sources/OMOP/vocab_v5.1_extended/CONCEPT_RELATIONSHIP.csv",delim = "\t",progress = FALSE)
+ 
+```
+__Conversion__    
+The concept relationship name, RELATIONSHIP_ID, needs to be converted into the standard name cleanup.
+
+```{r, message=FALSE}
+concept_rel <- concept_rel%>%mutate(RELATIONSHIP_ID=toupper(clean_name(RELATIONSHIP_ID)))
+names(concept_rel) <- clean_name(names(concept_rel))
+write_csv(concept_rel,"/data01/data_sources/OMOP/vocab_v5_stage/concept_rel.csv",na = "")
+#write_csv(concept_rel,"/var/lib/neo4j/import/OMPO_vocabulary/vocab_download_v5/concept_rel.csv",na = "")
+
+
+```
+
+###Transfer Data to Cloud
+
+The data needs to reside in the "import" directory associated with the database.  The data needs to be transfered 
+```{bash}
+ rsync -vae ssh /data01/data_sources/OMOP/vocab_v5_stage/*.csv  btaylor@52.165.188.204:/home/btaylor/omop/vocab_v5_stage/
+```
+
+##Build Trusted Data
+
+###Prepare for the import of Concept in the Neo4j Database
+
+```{r}
+cconst <- 'CREATE CONSTRAINT ON (n:Concept) ASSERT n.concept_id IS UNIQUE'
+cypher(graph,cconst)
+ cypher(graph,'CREATE INDEX ON :Concept(concept_code)')
+```
+
+###Import the Concept Data in the database
+
+```{r}
+qry <- '  
+USING PERIODIC COMMIT 10000
+LOAD CSV WITH HEADERS FROM
+"file:///omop/vocab_v5_stage/concept.csv" AS line
+
+WITH   
+   line 
+//LIMIT 10000    
+ MERGE (c:Concept:OMOP{concept_id:line.concept_id})
+ SET 
+    c.concept_name = line.concept_name,
+    c.standard_concept = line.standard_concept,
+    c.concept_code = line.concept_code ,
+    c.valid_start_date = line.valid_start_date,
+    c.valid_end_date = line.valid_end_date,
+    c.invalid_reason = line.invalid_reason
+RETURN count(line) AS line_count
+'
+cypher(graph,qry)
+
+cypher(graph,"OPTIONAL MATCH (c:Concept)--(d:Domain) WHERE d IS NULL RETURN   count(c)")
+```
+
+
+
+###Domains
+```{r}
+addConstraint(graph,"Domain","domain_id")
+domains <- read_delim("/data01/data_sources/OMOP/vocab_v5_stage/DOMAIN.csv",delim = "\t")
+#domains <- domains%>%mutate(DOMAIN_ID = gsub("( |/)","_",DOMAIN_ID))
+#(domains%>%arrange(DOMAIN_ID))
+names(domains) <- clean_name(names(domains))
+
+apply(domains,MARGIN = 1,function(the_row){
+  properties <- as.list(the_row)
+  getOrCreateNode(graph,"Domain",properties)
+  
+  
+})
+
+qry <- 'USING PERIODIC COMMIT 10000
+LOAD CSV WITH HEADERS FROM  "file:///omop/vocab_v5_stage/DOMAIN.csv" AS line FIELDTERMINATOR "\t"
+MERGE (domain:Domain{domain_id:line.DOMAIN_ID})
+    SET domain.domain_name = line.DOMAIN_NAME,
+        domain.domain_concept_id =line.DOMAIN_CONCEPT_ID
+
+
+'
+qry <- 'LOAD CSV WITH HEADERS FROM  "file:///omop/vocab_v5_stage/DOMAIN.csv" AS line 
+   RETURN line'
+results <- cypherToList(graph,qry)
+```
+
+
+###Vocabulary
+```{r}
+addConstraint(graph,"Vocabulary","vocabulary_id")
+
+vocabulary <- read_delim("/data01/data_sources/OMOP/vocab_download_v5/VOCABULARY.csv",delim = "\t"  )
+names(vocabulary) <- clean_name(names(vocabulary))
+
+apply(vocabulary,MARGIN = 1,function(the_row){
+  properties <- as.list(the_row)
+  getOrCreateNode(graph,"Vocabulary",properties)
+  
+  
+})
+
+'USING PERIODIC COMMIT 10000
+LOAD CSV WITH HEADERS FROM  "file:///omop/vocab_v5_stage/VOCABULARY.csv" AS line FIELDTERMINATOR "\t"
+MERGE (v:Vocabulary{vocabulary_id:line.VOCABULARY_ID})
+    SET v.vocabulary_name = line.VOCABULARY_NAME,
+        v.vocabulary_concept_id =line.VOCABULARY_CONCEPT_ID,
+        v.vocabulary_reference = line.VOCABULARY_REFERENCE,
+        v.vocabulary_version = line.VOCABULARY_VERSION
+
+
+'
+
+
+
+```
+
+
+###Concept Class
+
+```{r}
+addConstraint(graph,"Concept_Class","concept_class_id")
+concept_class <- read_delim("/data01/data_sources/OMOP/vocab_v5_stage/CONCEPT_CLASS.csv",delim = "\t")
+names(concept_class) <- clean_name(names(concept_class))
+
+
+apply(concept_class,MARGIN = 1,function(the_row){
+  properties <- as.list(the_row)
+  getOrCreateNode(graph,"Concept_Class",properties)
+  
+  
+})
+
+
+
+'USING PERIODIC COMMIT 10000
+LOAD CSV WITH HEADERS FROM  "file:///omop/vocab_v5_stage/CONCEPT_CLASS.csv" AS line FIELDTERMINATOR "\t"
+MERGE (cc:Concept_Class{concept_class_id:line.CONCEPT_CLASS_ID})
+    SET cc.concept_class_name = line.CONCEPT_CLASS_NAME,
+        cc.concept_class_concept_id =line.CONCEPT_CLASS_CONCEPT_ID 
+
+
+'
+```
+
+
+
+
+###Relationship Assignment
+
+
+Add relationship between the concept and the vocabulary
+```{r}
+qry <- '  
+USING PERIODIC COMMIT 1000
+LOAD CSV WITH HEADERS FROM
+"file:///omop/vocab_v5_stage/concept.csv" AS line
+
+WITH   
+   line 
+//LIMIT 0    
+ MATCH (c:Concept)
+  WHERE c.concept_id = line.concept_id
+WITH line, c
+MATCH (n:Vocabulary)
+  WHERE (n.vocabulary_id = line.vocabulary_id)
+WITH c,n
+MERGE (c)-[:MEMBER_OF]->(n)'
+cypher(graph,qry)
+```
+
+Add relationship between the concept and the concept class
+```{r}
+'PROFILE  
+USING PERIODIC COMMIT 1000
+LOAD CSV WITH HEADERS FROM
+"file:///omop/vocab_v5_stage/concept.csv" AS line
+
+WITH   
+   line 
+//LIMIT 0    
+ MATCH (c:Concept)
+  WHERE c.concept_id = line.concept_id
+WITH line, c
+MATCH (n:Concept_Class)
+  WHERE (n.concept_class_id = line.concept_class_id)
+MERGE (c)-[:MEMBER_OF]->(n)'
+cypher(graph,qry)
+```
+
+
+Add the domain relation to the Concept
+```{r}
+qry <- 'PROFILE  
+USING PERIODIC COMMIT 10000
+LOAD CSV WITH HEADERS FROM
+"file:///omop/vocab_v5_stage/concept.csv" AS line
+
+WITH   
+   line 
+//LIMIT 0    
+ MATCH (c:Concept)
+  WHERE c.concept_id = line.concept_id
+WITH line, c
+MATCH (d:Domain)
+  WHERE (d.domain_id = line.domain_id)
+WITH d,c
+MERGE (c)-[:MEMBER_OF]->(d)
+'
+cypher(graph,qry)
+```
+
+
+
+
+###Relationships
+
+```{r}
+
+rels_2 <- read_csv("/data01/data_sources/OMOP/vocab_v5_stage/concept_rel.csv",n_max = 50)
+clean_relationship_name(rels_2$RELATIONSHIP_ID)
+relationships <- read_delim("/data01/data_sources/OMOP/RELATIONSHIP.csv",delim = "\t")
+relationships%>%mutate(rID = clean_relationship_name(RELATIONSHIP_ID))                              
+(relationships%>%arrange(RELATIONSHIP_ID))
+(relationships%>%filter(IS_HIERARCHICAL == 1)%>%arrange(RELATIONSHIP_ID))
+relationships <- relationships%>%mutate(RELATIONSHIP_ID = toupper(gsub("( |/)","_",gsub(" - ","_",gsub("([A-Z])(-)([A-Z])","\\1_\\3" ,toupper(RELATIONSHIP_ID))))),REVERSE_RELATIONSHIP_ID = toupper(gsub("( |/)","_",gsub(" - ","_",gsub("([A-Z])(-)([A-Z])","\\1_\\3" ,toupper(REVERSE_RELATIONSHIP_ID))))))
+relationships%>%select(RELATIONSHIP_ID,REVERSE_RELATIONSHIP_ID,RELATIONSHIP_NAME)
+ 
+```
+
+
+#Vocabulary
+```{r}
+vocabulary <- read_delim("/data01/data_sources/OMOP/VOCABULARY.csv",delim = "\t"  )
+vocabulary%>%arrange(VOCABULARY_ID)
+```
+
+
+###Concept Synonyms
+
+__Label::__Concept_Synonym
+
+
+```{r}
+
+concept_synonym <- read_delim("/data01/data_sources/OMOP/CONCEPT_SYNONYM.csv",delim = "\t",n_max = 1000)
+(concept_synonym)
+```
+
+
+#Concept Relationships
+
+Concept Relationships are based on a file that pairs the from and to concepts.  The relationship type is dependent upon the the name in the row that pairs the two concepts. Assigning the relationship type could be handled two different ways.   The data set could be subseted based on the relationship type, and then placed in individual files.  Each of the files would be imported based on the relationship type.   The alternative is to use dynamic relationship creation. This allows the reading of the relationship type from the row of the dataset, and programaticaly creating the relationship.   This capabability is based on an APOC "Process" that was developed to support this.   
+
+
+###Create the Relationships in neo4j 
+
+To do this, we need to install the apoc jar file so we can run procedures in Cypher that will allow dynamic creation 
+of relationships.
+Download apoc jar file in to the neo4j/plugins directory
+
+https://github.com/neo4j-contrib/neo4j-apoc-procedures/releases/tag/3.1. 
+
+relationship creation is found here: 
+
+```{example}
+USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS FROM "file:///roletoresourceaction.csv" AS row
+MATCH
+  (role:Role {roleId: row.ROLE_ID}),
+  (resource:Resource {resourceId: row.RESOURCE_ID}),
+  (action:Action {actionId: row.ACTION_ID})
+OPTIONAL MATCH (role)-[rel]->(resource)
+WITH role, resource, action, COLLECT(TYPE(rel)) AS relTypes
+WHERE NOT action.name IN relTypes
+CALL apoc.create.relationship(role, action.name, NULL, resource) YIELD newRel
+RETURN role, resource, newRel;
+
+```
+
+
+```{r}
+qry <- 'USING PERIODIC COMMIT 10000'
+qry <- 'LOAD CSV WITH HEADERS FROM
+"file:///omop/vocab_v5_stage/concept_rel.csv" AS line
+
+WITH   
+   line 
+   LIMIT 5
+RETURN line
+
+'
+cypherToList(graph,qry)
+
+
+qry <- '
+USING PERIODIC COMMIT 10000
+LOAD CSV WITH HEADERS FROM
+"file:///omop/vocab_v5_stage/concept_rel.csv" AS line
+
+WITH   
+   line 
+//LIMIT 100
+MATCH (concpt1:Concept{concept_id:line.concept_id_1})
+with line, concpt1 
+MATCH (concpt2:Concept{concept_id:line.concept_id_2})
+with line,concpt1,concpt2
+CALL apoc.merge.relationship(concpt1, line.relationship_id, 
+  NULL,{valid_start_date:line.valid_start_date, valid_end_date:line.valid_end_date,invalid_reason:line.invalid_reason}, concpt2) YIELD rel
+RETURN count(concpt1)
+
+'
+cypher(graph,qry)
+
+cypher(graph,"MATCH (concpt1:Concept)-[rel]-(concpt2:Concept) WHERE  NOT rel.valid_end_date IS NULL RETURN concpt1 LIMIT 5")
+```

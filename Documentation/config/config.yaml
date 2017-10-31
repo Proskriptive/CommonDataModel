@@ -1,0 +1,12 @@
+
+#Configuration
+
+db_information:
+  user_name: "neo4j"
+  password: "neo4j_is_nice"
+  host: "127.0.0.1"
+  #host: "104.43.228.63"  
+
+#Groups available
+groups: 
+  group_names: ["Broward County","Palm Beach County","Broward and Palm Beach Counties","Florida State Providers"]
